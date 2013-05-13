@@ -1,0 +1,259 @@
+/* 
+ * IdaProDasmParser.jj - Copyright 2004 Johannes Kinder <jk@jakstab.org>
+ * This file is part of the Mocca project.
+ */
+
+options {
+LOOKAHEAD=2;
+}
+
+PARSER_BEGIN(AsmParser)
+
+package de.tum.mocca.parser;
+
+public class AsmParser {
+	private GraphBuilder gBuilder;
+	private java.util.List cfgList;
+
+    public static void main(String args[]) throws ParseException {
+
+		AsmParser parser = new AsmParser(System.in);
+    	parser.gBuilder = new GraphBuilder();
+    	parser.cfgList = new java.util.LinkedList();
+		while (true) {
+		    System.out.print("Enter Expression: ");
+		    System.out.flush();
+		    try {
+		    	parser.program();
+		    } catch (Exception e) {
+		    	System.out.println("Parse Error: " + e.getMessage());
+				System.out.println("Exiting.");
+				System.exit(1);
+		    }
+		}
+    }
+    
+    public java.util.List parseIntoKripkeStructures() throws ParseException {
+    	cfgList = new java.util.LinkedList();
+		gBuilder = new GraphBuilder();
+		program();
+		return cfgList;
+    }
+
+}
+
+PARSER_END(AsmParser)
+
+/* Macros */
+<*> TOKEN :
+{
+	< #SPC: " " | "\t" >
+|	< #LETTER : ["a"-"z","A"-"Z","_","@",".","'","\\","$"] >
+|	< #DIGIT : ["0"-"9"] >
+|	< #HEX: (["0"-"9"] | ["A", "B", "C", "D", "E", "F"])+ >
+}
+
+// Skip anything until we encounter a procedure
+SKIP :
+{
+	<~[]>
+}
+
+TOKEN :
+{
+	< PROC: "proc"<SPC>"near" > : InsideProc
+}
+
+/* COMMENTS */
+
+<InsideProc> SPECIAL_TOKEN :
+{
+	<SINGLE_LINE_COMMENT: ";" (~["\n","\r"])*>
+}
+
+<InsideProc> SKIP :
+{
+	" "
+|	"\t"
+}
+
+/* Skip data definitions (like switch statements) */
+<InsideProc> SKIP :
+{
+	<DATA: ("dd" | "dw" | "db" ) " " (~["\n","\r"])*>
+}
+
+<InsideProc> TOKEN :
+{
+	< ENDP: "endp" > : DEFAULT
+}
+
+<InsideProc> TOKEN :
+{
+	< EOL: "\n" | "\r\n" >
+|	< COMMA: "," >
+|	< ASSIGN: "=" >
+|	< LPAREN: "(" >
+|	< RPAREN: ")" >
+|	< LABEL: <LETTER>(<LETTER>|<DIGIT>)*":" >
+|	< HEXLITERAL: ("-")?(<HEX>"h") >
+|	< DECLITERAL: ("-")?(<DIGIT>)+ >
+|	< ADDRESS: "[" (<LETTER> | <DIGIT> | ["+","-","*"])+ "]" >
+|	< INSTPREFIX: "rep" | "repe" | "repne" | "repnz" | "repz" | "lock" >
+|	< PTRPREFIX: <LETTER> (<LETTER> | <DIGIT>)* <SPC> "ptr" > // IDA specific?
+|	< SHORT: "short" >
+|	< FAR: "far" >
+|	< SMALL: "small" >
+|	< LARGE: "large" >
+|	< OFFSET: "offset" >
+|	< IDENTIFIER: (<LETTER> | "?") ( <LETTER> | <DIGIT> | [".","?","+"] )* >
+}
+
+void program() :
+{
+}
+{
+	( procedure() )*
+	<EOF>
+}
+
+void procedure() :
+{
+	Token t;
+}
+{
+	(	
+		<PROC>(<EOL>)+
+    	(varDeclaration() <EOL>)*
+    	(<EOL>)* 
+    	((asmLine() <EOL>) | <EOL>)+
+    	t=<IDENTIFIER> <ENDP>		// The EOLs after endp are ignored by the tokenizer
+    )
+    {
+    	gBuilder.setProcedureName(t.image);
+    	gBuilder.finish();
+    	cfgList.add(gBuilder.getKripkeStructure());
+		gBuilder = new GraphBuilder();
+    }
+}
+
+void varDeclaration() :
+{
+	Token v;
+}
+{
+	v=<IDENTIFIER><ASSIGN><PTRPREFIX>(<DECLITERAL> | <HEXLITERAL>)
+}
+
+void asmLine() :
+{
+	String[] sx;
+	Token t;
+}
+{
+	sx = ternaryinstruction() {
+		gBuilder.addInstruction(sx);
+	}
+|	t = <LABEL> {
+		// remove trailing colon
+		gBuilder.addLabel(t.image.substring(0, t.image.length() - 1));
+	}
+}
+
+String[] ternaryinstruction() :
+{
+	String[] sx;
+	String p = null;
+}
+{
+	sx = binaryinstruction() (<COMMA> p = parameter())? {
+		sx[3] = p;
+		return sx;
+	}
+}
+
+String[] binaryinstruction() :
+{
+	String[] sx;
+	String p = null;
+}
+{
+	sx = unaryinstruction() (<COMMA> p = parameter())? {
+		sx[2] = p;
+		return sx;
+	}
+}
+
+String[] unaryinstruction() :
+{
+	String s, p = null;
+	// instruction is returned in a string array with up to 3 parameters
+	String[] r = new String[4];
+}
+{
+	s = prefixedinstruction() (p = parameter())? {
+		r[0] = s;
+		r[1] = p;
+		return r;
+	}
+}
+
+String prefixedinstruction() :
+{
+	Token t = null;
+	String s;
+}
+{
+	(t=<INSTPREFIX>)? s = bareinstruction() {
+		return (t == null) ? s : t.image + " " + s;
+	}
+}
+
+String bareinstruction() :
+{
+	Token t;
+}
+{
+	t = <IDENTIFIER> {
+		return t.image;
+	}
+}
+
+String parameter() :
+{
+	String s;
+}
+{
+	<LPAREN> s=bareparameter() <RPAREN> {
+		return s;
+	}
+|	s=bareparameter() {
+		return s;
+	}
+}
+
+String bareparameter() :
+{
+	Token u = null, v = null, w = null, x = null;
+}
+{
+	(<SHORT> | <FAR> | v=<OFFSET>) (<PTRPREFIX>)? w = <IDENTIFIER> {
+		return v == null ? w.image : (v.image + w.image);
+	}
+| 	(
+     (<SMALL> | <LARGE> )?( u=<PTRPREFIX> )? ( w=<ADDRESS> 
+					  | (
+					     (<LPAREN>)? ( v=<LABEL> )? (
+					   							 w=<DECLITERAL> 
+								    		   | w=<HEXLITERAL> 
+										       | w=<IDENTIFIER> 
+										       | w=<ADDRESS> 
+												  ) (<RPAREN>)? (  x=<ADDRESS> 
+												     | (<LPAREN> ( <IDENTIFIER> | <DECLITERAL> ) <RPAREN> )
+									    )?
+					    ) 
+					  )  
+	) {
+		return w.image + (x == null ? "" : x.image);
+	  }
+}

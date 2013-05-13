@@ -1,0 +1,226 @@
+options {
+LOOKAHEAD=2;
+}
+
+PARSER_BEGIN(CtplParser)
+
+package de.tum.mocca.parser;
+import de.tum.mocca.ctpl.*;
+
+public class CtplParser {
+	
+    public static void main(String args[]) throws ParseException {
+		CtplParser parser = new CtplParser(System.in);
+		while (true) {
+		    System.out.print("Enter Expression: ");
+		    System.out.flush();
+		    try {
+				SimpleNode n = parser.oneline();
+				// Skip first node
+				n = (SimpleNode)n.jjtGetChild(0);
+				System.out.println(convertToCtplTree(n));
+		    } catch (Exception e) {
+		    	System.out.println("Parse Error: " + e.getMessage());
+				System.out.println("Exiting.");
+				System.exit(1);
+		    }
+		}
+    }
+    
+    public CtplParser(String s) {
+    	this(new java.io.StringReader(s));
+    }
+    
+    public CtplTreeNode parseIntoTree() throws ParseException {
+		SimpleNode n = oneline();
+		// Skip first node
+		n = (SimpleNode)n.jjtGetChild(0);
+		return convertToCtplTree(n);
+    }
+
+	/**
+	 * Helper function that converts the simple tree structure
+	 * to a CtlTree. Does simple predicate parsing.
+	 */
+	private static CtplTreeNode convertToCtplTree(SimpleNode simple) throws ParseException {
+		CtplTreeNode root;
+		if (simple.id == CtplParserTreeConstants.JJTPREDICATE) {
+			String body = simple.textValue;
+			String[] params;
+			if (simple.children != null) {
+				params = new String[simple.children.length];
+				for (int i=0; i<simple.children.length; i++)
+					if (((SimpleNode)simple.children[i]).id == CtplParserTreeConstants.JJTPARAMETER)
+						params[i] = ((SimpleNode)simple.children[i]).textValue;
+					else throw new ParseException(((SimpleNode)simple.children[i]).textValue + " is not a valid parameter!"); 
+			} else params = new String[0];
+			root = new CtplTreeNode(
+					new CtplPredicate(body, params)
+					);
+		} else if (/*(simple.id == CtlParserTreeConstants.JJTALL) ||*/
+			(simple.id == CtplParserTreeConstants.JJTEXISTS)) {
+				
+			if ((simple.children == null) || (simple.children.length != 2)) throw new ParseException("Wrong number of arguments for quantifier " + simple.textValue);
+			root = new CtplTreeNode(new CtplQuantifier(simple.id, ((SimpleNode)simple.children[0]).textValue));
+			root.addChild(convertToCtplTree((SimpleNode)simple.children[1]));
+		}
+		else {
+			root = new CtplTreeNode(new CtplOperator(simple.id));
+			if (simple.children != null)
+				for (int i=0; i<simple.children.length; i++)
+					root.addChild(convertToCtplTree((SimpleNode)simple.children[i]));
+		}
+		return root;
+	}
+}
+	
+PARSER_END(CtplParser)
+
+<*> SKIP :
+{
+ 	" "
+|	"\t"
+}
+
+<*> TOKEN :
+{
+	< EOL: "\n" | "\r\n" >
+|	< #SPC: " " | "\t" >
+}
+
+<*> TOKEN : /* SEPARATORS */
+{
+	< LPARENT: "(" >
+|	< RPARENT: ")" > : DEFAULT
+|	< COMMA: "," >
+}
+
+TOKEN : /* OPERATORS */
+{
+	< ALL: "A" >
+|	< FINALLY: "F" >
+|	< EXISTS: "E" >
+|	< NEXT: "X" >
+|	< GLOBALLY: "G" >
+|	< UNTIL: "U" >
+|	< AND: "&" >
+|	< OR: "|" >
+|	< NOT: "-" >
+//|	< QALL: "all" >
+|	< QEXISTS: "exists" >
+}
+
+TOKEN : /* PREDICATES */
+{
+	< #LETTER : ["a"-"z","A"-"Z","_"] >
+|	< #DIGIT : ["0"-"9"] >
+|	< PREDICATE: (["a"-"z","#"]) (<LETTER> | <DIGIT>)* > : WithinPredicate
+}
+
+<*> TOKEN : /* VARIABLES */
+{
+	< VARIABLE : ["$"] (["*"] | (<LETTER> (<LETTER> | <DIGIT> )*)) >
+}
+
+<WithinPredicate> TOKEN : /* PARAMETERS */
+{
+	< IDENTIFIER : ((<LETTER> | <DIGIT> | ["["]) ( <LETTER> | <DIGIT> | ["[","]","+",":"])*) >
+}
+
+SimpleNode oneline() : {}
+{
+  term() (<EOL> | <EOF>)
+  { return jjtThis; }
+}
+
+void term() #void : {}
+{
+	disjunction()
+}
+
+void disjunction() #void : {}
+{
+	(
+    	conjunction() (<OR> disjunction())?
+    ) #or(>1)
+}
+
+void conjunction() #void : {}
+{
+	(
+    	until() (<AND> conjunction())?
+    ) #and(>1)
+}
+
+void until() #void :
+{
+}
+{
+	(
+	    temporal() 
+	|	(<ALL> temporal() <UNTIL> until())		#AU
+	|	(<EXISTS> temporal() <UNTIL> until())	#EU
+	)
+}
+
+void temporal() #void :
+{
+}
+{
+	(
+		not()
+	|	(<ALL><NEXT> not())			#AX
+	|	(<ALL><FINALLY> not())		#AF
+	|	(<ALL><GLOBALLY> not())		#AG
+	|	(<EXISTS><NEXT> not())		#EX
+	|	(<EXISTS><FINALLY> not())	#EF
+	|	(<EXISTS><GLOBALLY> not())	#EG
+	|	(<QEXISTS> variable() term()) #exists
+//	|	(<QALL> variable() term()) #all
+	)
+}
+
+void not() #void :
+{
+}
+{
+	(
+		atom()
+	|	( <NOT> not() ) #not
+	)
+}
+
+void atom() #void : {}
+{
+	(
+    	predicate()
+    |	<LPARENT> term() <RPARENT>
+	)
+}
+
+void predicate() : { Token t; }
+{
+	(
+	t=<PREDICATE> (<LPARENT>(( parameter() (<COMMA> parameter() )*))? <RPARENT>)
+	) {
+		jjtThis.textValue = t.image;
+	}
+}
+
+void parameter() : { Token t; }
+{
+	(
+	t=<IDENTIFIER> | t=<VARIABLE>
+	) {
+		jjtThis.textValue = t.image;
+	}
+}
+
+void variable() : { Token t; }
+{
+	(
+	t=<VARIABLE>
+	) {
+		jjtThis.textValue = t.image;
+	}
+}

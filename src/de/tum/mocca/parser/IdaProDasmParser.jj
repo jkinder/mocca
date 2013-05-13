@@ -1,0 +1,253 @@
+/* 
+ * IdaProDasmParser.jj - Copyright 2004 Johannes Kinder <jk@jakstab.org>
+ * This file is part of the Mocca project.
+ */
+
+options {
+LOOKAHEAD=2;
+}
+
+PARSER_BEGIN(IdaProDasmParser)
+
+package de.tum.mocca.parser;
+
+public class IdaProDasmParser {
+
+	private de.tum.mocca.GraphBuilder gBuilder;
+	private java.util.List resultList;
+	
+    public java.util.List parseIntoKripkeStructures() throws ParseException {
+    	resultList = new java.util.LinkedList();
+		System.out.println("Begin parsing disassembly...");
+
+		gBuilder = new de.tum.mocca.GraphBuilder();
+		program();
+
+		System.out.println("End parsing disassembly.");
+		return resultList;
+    }
+}
+
+PARSER_END(IdaProDasmParser)
+
+TOKEN_MGR_DECLS :
+{
+  int macroNestingLvl = 0;
+}
+
+/* COMMENTS */
+
+SPECIAL_TOKEN :
+{
+	<SINGLE_LINE_COMMENT: ";" (~["\n","\r"])*>
+}
+
+
+TOKEN :
+{
+	< EOL: "\n" | "\r\n" >
+|	< #SPC: " " | "\t" >
+}
+
+/* Skip whitespace */
+SKIP :
+{
+	" "
+|	"\t"
+}
+
+/* Skip everything that is not interesting */
+SKIP :
+{
+	< (<LETTER>)+ (<SPC>)+ "macro" > { macroNestingLvl++; } : WithinMacro
+|	< "model" (<SPC>)+ (<LETTER>)+ <EOL> >
+|	< (<LETTER>)+ (<SPC>)+ ("segment" | "ends") (~["\n","\r"])* <EOL> >
+|	< ("assume" | "align" | "extrn" | "public" | "end" ) <SPC> (~["\n","\r"])* <EOL> >
+|	< "unicode" <SPC> (<DIGIT>)+ "," (~["\n","\r"])* <EOL> >
+|	< ((<LETTER> | <DIGIT> | "?")+ (<SPC>)+)? ("db" | "dw" | "dd") <SPC> (~["\n","\r"])* <EOL> >
+}
+
+<WithinMacro> SKIP :
+{
+	< "irpc" > { macroNestingLvl++; }
+|	< "endm" > { 
+		if (--macroNestingLvl <= 0) SwitchTo(DEFAULT);
+		}
+}
+
+<WithinMacro> MORE :
+{
+	<~[]>
+}
+
+
+/* SEPARATORS */
+TOKEN :
+{
+	< COMMA: "," >
+|	< COLON: ":" >
+}
+
+/* RESERVED WORDS */
+
+TOKEN:
+{
+	< OFFSET: "offset" >
+|	< SHORT: "short" >
+|	< FAR: "far" >
+//|	< PTRPREFIX: ("dword" | "word" | "byte" | "sockaddr" | "in_addr" )<SPC>"ptr" > // IDA specific stuff?
+|	< PTRPREFIX: (<LETTER>)+ <SPC> "ptr" > // IDA specific stuff?
+|	< PROC: "proc"<SPC>"near" >
+|	< ENDP: "endp" >
+|	< ADDRESS: "[" (~["\n","\r"])+ "]" >
+}
+
+/* OPERATORS */
+
+TOKEN :
+{
+	< ASSIGN: "=" >
+|	< PLUS: "+" >
+|	< MINUS: "-" >
+}
+
+/* MNEMONICS */
+
+TOKEN :
+{
+	< REGISTER: "al" | "cl" | "dl" | "bl" | "ah" | "ch" | "dh" | "bh" |
+	"ax" | "cx" | "dx" | "bx" | "sp" | "bp" | "si" | "di" |
+	"eax" | "ecx" | "edx" | "ebx" | "esp" | "ebp" | "esi" | "edi" >
+	
+|	< SEGMENT: "cs" | "ds" | "ss" | "es" | "fs" | "gs" >
+|	< INSTRUCTION: "aaa" | "aad" | "aam" | "aas" | "adc" | "add" | 
+	"and" | "cbw" | "clc" |	"cld" | "cli" | "cmc" | "cmp" | "cmpsb" | "cdq" |
+	"cmpsw" | "cwd" | "daa" | "das" | "dec" | "div" | "esc" | "hlt" |
+	"idiv" | "imul" | "inc" | "int" | "into" | "iret" | "lahf" |
+	"lds" | "lea" | "leave" | "les" | "lodsb" | "lodsw" |
+	"loopnz" | "loopz" | "mov" | "movsb" | "movsw" | "movsx" | "movzx" |
+	"mul" | "neg" | "movsd" |
+	"nop" |	"not" | "or" | "out" | "pop" | "popf" | "push" | "pushf" |
+	"rcl" | "rcr" | "rol" | "ror" | "sahf" | "sal" | "sar" | "sbb" |
+	"scasb" | "scasw" | "shl" | "shr" | "call" | "ret" | "retn" |
+	"stc" | "std" | "sti" | "stosb" | "stosw" | "stosd" | "sub" |
+	"test" | "wait" | "xchg" | "xlat" | "xor" >
+|	< CONTROLINSTR: "loop" | "loope" | "loopne" | "ja" | "jae" | "jb" |
+	"jbe" | "jc" | "jcxz" | "je" | "jg" | "jge" | "jl" | "jle" | "jmp" |
+	"jna" | "jnae" | "jnb" | "jnbe" | "jnc" | "jne" | "jng" | "jnge" |
+	"jnl" | "jnle" | "jno" | "jnp" | "jns" | "jnz" | "jo" | "jp" |
+	"jpe" | "jpo" | "js" | "jz" >
+|	< INSTPREFIX: "rep" | "repe" | "repne" | "repnz" | "repz" | "lock" >
+}
+
+/* LITERALS */
+
+TOKEN :
+{
+	< #LETTER : ["a"-"z","A"-"Z","_","@"] >
+|	< #DIGIT : ["0"-"9"] >
+|	< #HEX: (["0"-"9"] | ["A", "B", "C", "D", "E", "F"])+ >
+|	< HEXLITERAL: (<HEX>"h") >
+|	< DECLITERAL: (<DIGIT>)+ >
+}
+
+/* IDENTIFIERS */
+
+TOKEN :
+{
+	< IDENTIFIER: (<LETTER> | "??") (<LETTER>|<DIGIT>|"."|"?")* >
+}
+
+void program() :
+{
+}
+{
+	(
+	<EOL>
+|	(procedure()<EOL>)
+|	(asmLine()<EOL>)
+	)*
+	<EOF> {
+	   	gBuilder.finish();
+    	resultList.add(gBuilder.getKripkeStructure());
+	}
+}
+
+void procedure() :
+{
+	Token t;
+}
+{
+	(	
+		t=<IDENTIFIER><PROC>(<EOL>)+
+    	(varDeclaration() <EOL>)*
+    	(<EOL>)* 
+    	((asmLine() <EOL>) | <EOL>)+
+    	<IDENTIFIER> <ENDP>
+    )
+    { 
+    	gBuilder.setProcedureName(t.image);
+    	gBuilder.finish();
+    	resultList.add(gBuilder.getKripkeStructure());
+		gBuilder = new de.tum.mocca.GraphBuilder();
+    }
+}
+
+void varDeclaration() :
+{
+	Token v;
+}
+{
+	v=<IDENTIFIER><ASSIGN><PTRPREFIX>("-")?(<DECLITERAL> | <HEXLITERAL>)
+}
+
+void asmLine() :
+{
+	Token t;
+	java.util.Stack para = null;
+	de.tum.mocca.Instruction instr;
+}
+{
+	(<INSTPREFIX>)? t=<INSTRUCTION> (para=parameters())?
+    {
+    	gBuilder.addInstruction(t.image, para);
+    }
+|	t=<CONTROLINSTR> (para=parameters())?
+    {
+    	gBuilder.addControlInstruction(t.image, para);
+    }
+|	t=<IDENTIFIER><COLON>
+    {
+    	gBuilder.addLabel(t.image);
+    }
+}
+
+String parameter() :
+{
+	Token p=null, t;
+}
+{
+	<OFFSET> t=<IDENTIFIER> {return t.image;}
+|	(<SHORT> | <FAR>) (<PTRPREFIX>)? t=<IDENTIFIER> {return t.image;}  // ATTN: Simplification!
+|	(<PTRPREFIX>)? t=intLiteral(){return t.image;}
+|	(<SEGMENT> <COLON>)? (t=<IDENTIFIER> | t=intLiteral()) (p=<ADDRESS>)? {return t.image + (p==null ? "" : ("[" + p + "]"));}
+|	(p=<PTRPREFIX>)? t=<ADDRESS> {return (p==null ? "" : (p + " ")) + t.image;}
+|	t=<REGISTER> {return t.image;}
+}
+
+java.util.Stack parameters() :
+{
+	String s = null;
+	java.util.Stack sx = null;
+}
+{
+	s=parameter() (<COMMA> sx=parameters())? {
+		if (sx == null) sx = new java.util.Stack();
+		sx.push(s);
+		return sx;
+	}	
+}
+
+Token intLiteral() : { Token t; } {
+	(t=<DECLITERAL> | t=<HEXLITERAL>) { return t; }
+}
